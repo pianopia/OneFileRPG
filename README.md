@@ -9,6 +9,9 @@ This is a simple 3D RPG created with HTML and Three.js.
 *   **Leveling System:** Gain experience points (XP) by defeating enemies and level up. Your stats increase upon leveling up.
 *   **Quest System:** Receive quests from NPCs. Track your progress in the quest log.
 *   **Basic Exploration:** Move around, jump, and interact with objects and characters.
+*   **Enemy AI:** Enemies will pursue the player and attack when in range.
+*   **Player Health:** Take damage from enemies. If HP reaches zero, it's game over.
+*   **Enemy Respawn:** Defeated enemies will respawn after a short period, ensuring continuous action.
 
 ## How to Play
 
@@ -30,3 +33,4 @@ This is a simple 3D RPG created with HTML and Three.js.
 *   Explore the forest, find and defeat the slimes.
 *   Report back to the NPC after completing the quest to receive a reward.
 *   Defeat enemies to level up and become stronger.
+*   Survive enemy attacks and manage your health.
