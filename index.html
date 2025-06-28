@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>3D RPG</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Garamond', serif;
+        }
+        canvas {
+            display: block;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 4px;
+            height: 4px;
+            background-color: white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #instructions {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            font-size: 24px;
+            text-align: center;
+            cursor: pointer;
+        }
+        .hud {
+            position: absolute;
+            color: white;
+            font-size: 18px;
+            text-shadow: 1px 1px 2px black;
+            padding: 10px;
+            background-color: rgba(0,0,0,0.5);
+            border-radius: 5px;
+        }
+        #status-display {
+            top: 20px;
+            left: 20px;
+        }
+        #quest-log {
+            bottom: 20px;
+            left: 20px;
+            max-width: 300px;
+        }
+        #level-up-alert {
+            display: none;
+            position: absolute;
+            top: 30%;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 48px;
+            color: gold;
+            text-shadow: 2px 2px 4px black;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">
+        <h1>A Simple RPG</h1>
+        <p>Click to begin your adventure</p>
+        <p>
+            W, A, S, D: Move<br>
+            SPACE: Jump<br>
+            MOUSE: Look<br>
+            CLICK: Attack<br>
+            E: Interact<br>
+            ESC: Reset Game
+        </p>
+    </div>
+    <div id="crosshair" style="display: none;"></div>
+    <div id="status-display" class="hud" style="display: none;"></div>
+    <div id="quest-log" class="hud" style="display: none;"></div>
+    <div id="level-up-alert">LEVEL UP!</div>
+    <div id="npc-prompt" style="display: none; position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); color: white; font-size: 20px; text-shadow: 1px 1px 2px black;">[E] Talk</div>
+    <div id="npc-dialogue" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(0,0,0,0.7); color: white; padding: 20px; border-radius: 10px; text-align: center; max-width: 80%;"></div>
+    <canvas id="game-canvas"></canvas>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module">
+    import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        let scene, camera, renderer, controls;
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let onGround = false;
+        let gameActive = false, audioContext;
+        let lastFootstepTime = 0, bgmInterval;
+        let npc, enemies = [];
+
+        const player = {
+            level: 1,
+            xp: 0,
+            xpToNextLevel: 100,
+            hp: 100,
+            maxHp: 100,
+            attack: 10,
+            quests: {}
+        };
+
+        const objects = [];
+        const moveForward = { value: false };
+        const moveBackward = { value: false };
+        const moveLeft = { value: false };
+        const moveRight = { value: false };
+        const canJump = { value: false };
+
+        const instructions = document.getElementById('instructions');
+        const crosshair = document.getElementById('crosshair');
+        const statusDisplay = document.getElementById('status-display');
+        const questLog = document.getElementById('quest-log');
+        const levelUpAlert = document.getElementById('level-up-alert');
+        const npcPromptElement = document.getElementById('npc-prompt');
+        const npcDialogueElement = document.getElementById('npc-dialogue');
+
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x112233); // Darker sky
+            scene.fog = new THREE.Fog(0x112233, 0, 75);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.y = 1.8;
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+
+            // Controls
+            controls = new PointerLockControls(camera, document.body);
+            instructions.addEventListener('click', () => {
+                controls.lock();
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                audioContext.resume();
+            });
+            controls.addEventListener('lock', () => {
+                instructions.style.display = 'none';
+                crosshair.style.display = 'block';
+                statusDisplay.style.display = 'block';
+                questLog.style.display = 'block';
+                if (!gameActive) {
+                    startGame();
+                }
+            });
+            controls.addEventListener('unlock', () => {
+                instructions.style.display = 'flex';
+                crosshair.style.display = 'none';
+                statusDisplay.style.display = 'none';
+                questLog.style.display = 'none';
+            });
+            scene.add(controls.getObject());
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xcccccc, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 7.5);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+
+            // Floor
+            const floorGeometry = new THREE.PlaneGeometry(200, 200);
+            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x334422 });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+            objects.push(floor);
+
+            // Obstacles (Trees, Rocks)
+            const treeGeometry = new THREE.CylinderGeometry(0.5, 1, 8, 8);
+            const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x553311 });
+            for (let i = 0; i < 30; i++) {
+                const tree = new THREE.Mesh(treeGeometry, treeMaterial);
+                tree.position.set(Math.random() * 160 - 80, 4, Math.random() * 160 - 80);
+                tree.castShadow = true;
+                tree.receiveShadow = true;
+                scene.add(tree);
+                objects.push(tree);
+            }
+
+            // NPC
+            const npcGeometry = new THREE.SphereGeometry(1, 32, 16);
+            const npcMaterial = new THREE.MeshStandardMaterial({ color: 0x0088ff });
+            npc = new THREE.Mesh(npcGeometry, npcMaterial);
+            npc.position.set(5, 1, 5);
+            npc.castShadow = true;
+            npc.receiveShadow = true;
+            npc.userData = {
+                dialogue: [
+                    "Hello, adventurer! The forest is overrun with strange slimes.",
+                    "Could you defeat 10 of them for me? I would be most grateful.",
+                    "Come back to me once you have defeated them all."
+                ],
+                questName: "Slime Hunter"
+            };
+            scene.add(npc);
+            objects.push(npc);
+
+            spawnEnemies(15);
+
+            // Event Listeners
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousedown', attack);
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function resetGame() {
+            // Full reset logic would be more complex in an RPG
+            // For now, it just reloads the page to restart
+            location.reload();
+        }
+
+        function startGame() {
+            gameActive = true;
+            updateStatus();
+            updateQuestLog();
+            playBGM();
+        }
+
+        function spawnEnemies(count) {
+            const enemyGeometry = new THREE.BoxGeometry(1, 1, 1);
+            for (let i = 0; i < count; i++) {
+                const enemyMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+                const enemy = new THREE.Mesh(enemyGeometry, enemyMaterial);
+
+                let positionIsValid = false;
+                let position;
+                while (!positionIsValid) {
+                    position = new THREE.Vector3(
+                        Math.random() * 160 - 80,
+                        0.5,
+                        Math.random() * 160 - 80
+                    );
+                    positionIsValid = true;
+                    for (const obj of objects) {
+                        if (position.distanceTo(obj.position) < 5) {
+                            positionIsValid = false;
+                            break;
+                        }
+                    }
+                }
+                enemy.position.copy(position);
+                enemy.castShadow = true;
+                enemy.receiveShadow = true;
+                enemy.userData = { hp: 30, maxHp: 30, xpValue: 15 };
+                scene.add(enemy);
+                objects.push(enemy);
+                enemies.push(enemy);
+            }
+        }
+
+        function updateStatus() {
+            statusDisplay.innerHTML = `
+                Level: ${player.level}<br>
+                HP: ${player.hp} / ${player.maxHp}<br>
+                XP: ${player.xp} / ${player.xpToNextLevel}
+            `;
+        }
+
+        function updateQuestLog() {
+            let logHTML = "<strong>Quests:</strong><br>";
+            if (Object.keys(player.quests).length === 0) {
+                logHTML += "No active quests.";
+            } else {
+                for (const questName in player.quests) {
+                    const quest = player.quests[questName];
+                    logHTML += `- ${questName}: ${quest.progress} / ${quest.required}<br>`;
+                }
+            }
+            questLog.innerHTML = logHTML;
+        }
+
+        function gainXP(amount) {
+            player.xp += amount;
+            if (player.xp >= player.xpToNextLevel) {
+                levelUp();
+            }
+            updateStatus();
+        }
+
+        function levelUp() {
+            player.level++;
+            player.xp -= player.xpToNextLevel;
+            player.xpToNextLevel = Math.floor(player.xpToNextLevel * 1.5);
+            player.maxHp += 20;
+            player.hp = player.maxHp; // Full heal on level up
+            player.attack += 5;
+
+            levelUpAlert.style.display = 'block';
+            setTimeout(() => { levelUpAlert.style.display = 'none'; }, 2000);
+            updateStatus();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'KeyW': moveForward.value = true; break;
+                case 'KeyA': moveLeft.value = true; break;
+                case 'KeyS': moveBackward.value = true; break;
+                case 'KeyD': moveRight.value = true; break;
+                case 'Space': if (canJump.value) velocity.y += 8; canJump.value = false; break;
+                case 'Escape': resetGame(); break;
+                case 'KeyE': handleInteraction(); break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'KeyW': moveForward.value = false; break;
+                case 'KeyA': moveLeft.value = false; break;
+                case 'KeyS': moveBackward.value = false; break;
+                case 'KeyD': moveRight.value = false; break;
+            }
+        }
+
+        function handleInteraction() {
+            if (!controls.isLocked) return;
+            const distance = camera.position.distanceTo(npc.position);
+            if (distance < 4) {
+                const quest = player.quests[npc.userData.questName];
+                if (quest && quest.progress >= quest.required) {
+                    npcDialogueElement.innerHTML = "Thank you so much! You are a true hero.";
+                    gainXP(50); // Quest completion XP
+                    delete player.quests[npc.userData.questName];
+                    updateQuestLog();
+                } else {
+                    npcDialogueElement.innerHTML = npc.userData.dialogue.join("<br>");
+                    if (!quest) {
+                        player.quests[npc.userData.questName] = { progress: 0, required: 10 };
+                        updateQuestLog();
+                    }
+                }
+                npcDialogueElement.style.display = 'block';
+            }
+        }
+
+        function attack() {
+            if (!controls.isLocked || !gameActive) return;
+            if (!audioContext) return;
+
+            // Sword swing sound
+            const now = audioContext.currentTime;
+            const gainNode = audioContext.createGain();
+            gainNode.connect(audioContext.destination);
+            gainNode.gain.setValueAtTime(0.5, now);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+
+            const oscillator = audioContext.createOscillator();
+            oscillator.type = 'white';
+            oscillator.frequency.setValueAtTime(1000, now);
+            oscillator.connect(gainNode);
+            oscillator.start(now);
+            oscillator.stop(now + 0.3);
+
+            const raycaster = new THREE.Raycaster(camera.getWorldPosition(new THREE.Vector3()), camera.getWorldDirection(new THREE.Vector3()));
+            const intersects = raycaster.intersectObjects(enemies);
+
+            if (intersects.length > 0 && intersects[0].distance < 3) { // Melee range
+                const enemy = intersects[0].object;
+                enemy.userData.hp -= player.attack;
+
+                // Visual feedback for hit
+                enemy.material.color.set(0xff0000);
+                setTimeout(() => { enemy.material.color.set(0x00ff00); }, 200);
+
+                if (enemy.userData.hp <= 0) {
+                    scene.remove(enemy);
+                    enemies.splice(enemies.indexOf(enemy), 1);
+                    objects.splice(objects.indexOf(enemy), 1);
+                    gainXP(enemy.userData.xpValue);
+
+                    const quest = player.quests["Slime Hunter"];
+                    if (quest) {
+                        quest.progress++;
+                        updateQuestLog();
+                    }
+                }
+            }
+        }
+
+        let prevTime = performance.now();
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now();
+            const delta = (time - prevTime) / 1000;
+
+            if (controls.isLocked) {
+                // NPC interaction prompt
+                const distanceToNPC = camera.position.distanceTo(npc.position);
+                if (distanceToNPC < 4) {
+                    npcPromptElement.style.display = 'block';
+                } else {
+                    npcPromptElement.style.display = 'none';
+                    npcDialogueElement.style.display = 'none';
+                }
+
+                const isMoving = moveForward.value || moveBackward.value || moveLeft.value || moveRight.value;
+                if (isMoving && onGround && time - lastFootstepTime > 450) {
+                    playFootstepSound();
+                    lastFootstepTime = time;
+                }
+
+                // Gravity
+                velocity.y -= 15 * delta;
+
+                // Movement
+                direction.z = Number(moveForward.value) - Number(moveBackward.value);
+                direction.x = Number(moveRight.value) - Number(moveLeft.value);
+                direction.normalize();
+
+                const speed = 100.0;
+                if (moveForward.value || moveBackward.value) velocity.z -= direction.z * speed * delta;
+                if (moveLeft.value || moveRight.value) velocity.x -= direction.x * speed * delta;
+                
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+                controls.getObject().position.y += velocity.y * delta;
+
+                // Damping
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                // Ground check
+                if (controls.getObject().position.y < 1.8) {
+                    velocity.y = 0;
+                    controls.getObject().position.y = 1.8;
+                    canJump.value = true;
+                    onGround = true;
+                } else {
+                    onGround = false;
+                }
+            }
+
+            prevTime = time;
+            renderer.render(scene, camera);
+        }
+
+        function playFootstepSound() {
+            if (!audioContext) return;
+            const now = audioContext.currentTime;
+
+            const gainNode = audioContext.createGain();
+            gainNode.gain.setValueAtTime(0.3, now);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+            gainNode.connect(audioContext.destination);
+
+            const noise = audioContext.createBufferSource();
+            const bufferSize = audioContext.sampleRate * 0.25;
+            const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                data[i] = Math.random() * 2 - 1;
+            }
+            noise.buffer = buffer;
+            
+            const filter = audioContext.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 300;
+            
+            noise.connect(filter).connect(gainNode);
+            noise.start(now);
+            noise.stop(now + 0.25);
+        }
+
+        function playBGM() {
+            if (!audioContext) return;
+            const notes = [220.00, 261.63, 329.63, 392.00]; // A minor feel
+
+            bgmInterval = setInterval(() => {
+                const now = audioContext.currentTime;
+                const gainNode = audioContext.createGain();
+                gainNode.connect(audioContext.destination);
+                gainNode.gain.setValueAtTime(0, now);
+                gainNode.gain.linearRampToValueAtTime(0.08, now + 0.2);
+                gainNode.gain.linearRampToValueAtTime(0, now + 1.0);
+
+                const oscillator = audioContext.createOscillator();
+                oscillator.type = 'sine';
+                const freq = notes[Math.floor(Math.random() * notes.length)];
+                oscillator.frequency.setValueAtTime(freq, now);
+                oscillator.connect(gainNode);
+
+                oscillator.start(now);
+                oscillator.stop(now + 1.0);
+            }, 1200);
+        }
+
+        init();
+        animate();
+    </script>
+</body>
+</html>
+</body>
+</html>
